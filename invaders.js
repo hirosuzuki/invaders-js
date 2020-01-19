@@ -24,7 +24,11 @@ let memory = {
     }
 };
 
-let cpu = new Intel8080(memory);
+let hook = (state) => {
+    document.getElementById("log").value = state
+}
+
+let cpu = new Intel8080(memory, hook);
 
 fetch("invaders.rom").then((result) => {
     return result.arrayBuffer()
