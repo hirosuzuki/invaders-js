@@ -7,7 +7,7 @@ let rom = new Uint8Array(0x2000);
 
 let memory = {
     write: (address, data) => {
-        if (address >=0x2000) {
+        if (address >= 0x2000) {
             ram[address % 0x2000] = data;
         }
         console.log("Memory Write: " + address + " = " + data);

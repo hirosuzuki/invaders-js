@@ -175,8 +175,8 @@ Intel8080.prototype.R16SP = function (i, value) {
 Intel8080.prototype.run = function () {
     let loop = () => {
         if (this.Running) {
-            this.step()        
-            setInterval(loop, 30)    
+            this.step()
+            setInterval(loop, 30)
         }
     }
     this.Running = true
