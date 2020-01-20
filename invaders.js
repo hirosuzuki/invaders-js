@@ -10,7 +10,7 @@ let memory = {
         if (address >= 0x2000) {
             ram[address % 0x2000] = data;
         }
-        console.log("Memory Write: " + address + " = " + data);
+        //console.log("Memory Write: " + address + " = " + data);
     },
     read: (address) => {
         let data;
@@ -19,13 +19,17 @@ let memory = {
         } else {
             data = ram[address % 0x2000]
         }
-        console.log("Memory Read: " + address + " = " + data);
+        //console.log("Memory Read: " + address + " = " + data);
         return data;
     }
 };
 
+let logs = []
+
 let hook = (state) => {
-    document.getElementById("log").value = state
+    logs.push(state)
+    logs = logs.slice(-10)
+    document.getElementById("log").value = logs.join("\n")
 }
 
 let cpu = new Intel8080(memory, hook);
@@ -34,7 +38,14 @@ fetch("invaders.rom").then((result) => {
     return result.arrayBuffer()
 }).then((data) => {
     rom = new Uint8Array(data);
-    cpu.run();
 }).catch((err) => {
     console.log(err)
 });
+
+document.querySelector("#start").addEventListener("click", () => {
+    cpu.run()
+})
+
+document.querySelector("#stop").addEventListener("click", () => {
+    cpu.Running = false
+})

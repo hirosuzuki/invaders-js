@@ -180,13 +180,76 @@ Intel8080.prototype.run = function () {
         }
     }
     this.Running = true
-    setInterval(loop, 30)
+    setInterval(loop, 0)
+}
+
+Intel8080.prototype.hex2 = function (value) {
+    let s = value.toString(16).toUpperCase()
+    if (value <= 15) {
+        return "0" + s
+    } else {
+        return s
+    }
+}
+
+Intel8080.prototype.hex4 = function (value) {
+    return this.hex2(value >> 8) + this.hex2(value & 0xff)
+}
+
+Intel8080.prototype.fetch = function () {
+    let value = this.memory.read(this.PC())
+    this.PC(this.PC() + 1)
+    return value
+}
+
+Intel8080.prototype.fetch16 = function () {
+    return this.fetch() + (this.fetch() << 8)
+}
+
+Intel8080.prototype.push = function (value) {
+    this.SP(this.SP() - 2)
+    this.memory.write(this.SP(), value & 0xff)
+    this.memory.write(this.SP() + 1, value >> 8)
 }
 
 Intel8080.prototype.step = function () {
-    let d = this.memory.read(this.PC())
-    if (this.hook) {
-        this.hook("Run " + this.PC() + " " + d)
+    state = this.hex4(this.PC())
+    let op = this.fetch()
+    state += " " + this.hex2(op)
+    if (op == 0x00) {
+        // NOP
+    } else if ((op & 0xc7) == 0x06) {
+        // LDI
+        let v = this.fetch()
+        state += this.hex2(v)
+        this.R8((op & 0x38) >> 3, v)
+    } else if ((op & 0xcf) == 0x01) {
+        // LXI BC/DE/HL/SP
+        let v = this.fetch16()
+        state += this.hex4(v)
+        this.R16SP((op & 0x30) >> 4, v)
+    } else if (op == 0xc3) {
+        // JP
+        let v = this.fetch16()
+        state += this.hex4(v)
+        this.PC(v)
+    } else if (op == 0xcd) {
+        // CALL
+        let v = this.fetch16()
+        state += this.hex4(v)
+        this.push(this.PC())
+        this.PC(v)
+    } else {
+        this.Running = false
     }
-    this.PC(this.PC() + 1)
+    if (this.hook) {
+        state = (state + "    ").slice(0, 11)
+        state += " AF=" + this.hex4(this.AF())
+        state += " BC=" + this.hex4(this.BC())
+        state += " DE=" + this.hex4(this.DE())
+        state += " HL=" + this.hex4(this.HL())
+        state += " SP=" + this.hex4(this.SP())
+        state += " PC=" + this.hex4(this.PC())
+        this.hook(state)
+    }
 }
