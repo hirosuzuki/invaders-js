@@ -172,6 +172,20 @@ Intel8080.prototype.R16SP = function (i, value) {
     }
 }
 
+Intel8080.prototype.CheckFlag = function (i) {
+    // F := SZ0H0P1C
+    switch (i) {
+        case 0: return (this.F() & 0x40) == 0x00; // NZ
+        case 1: return (this.F() & 0x40) == 0x01; // Z
+        case 2: return (this.F() & 0x01) == 0x00; // NC
+        case 3: return (this.F() & 0x01) == 0x01; // C
+        case 4: return (this.F() & 0x04) == 0x00; // PO
+        case 5: return (this.F() & 0x04) == 0x01; // PE
+        case 6: return (this.F() & 0x80) == 0x00; // P
+        case 7: return (this.F() & 0x80) == 0x01; // M
+    }
+}
+
 Intel8080.prototype.run = function () {
     let loop = () => {
         if (this.Running) {
@@ -212,18 +226,55 @@ Intel8080.prototype.push = function (value) {
     this.memory.write(this.SP() + 1, value >> 8)
 }
 
+Intel8080.prototype.pop = function () {
+    let value = this.memory.read(this.SP()) + (this.memory.read(this.SP() + 1) << 8)
+    this.SP(this.SP() + 2)
+    return value;
+}
+
+Intel8080.prototype.inc8 = function (value) {
+    value = (value + 1) & 0xff
+    let f = this.F()
+    // F := SZ0H0P1C
+    //      xx-x-x--
+    f = f & 0x2b
+    f |= (value & 0x80)
+    if (value == 0) f |= 0x40
+    this.F(f)
+    return value
+}
+
+Intel8080.prototype.dec8 = function (value) {
+    value = (value - 1) & 0xff
+    let f = this.F()
+    // F := SZ0H0P1C
+    //      xx-x-x--
+    f = f & 0x2b
+    f |= (value & 0x80)
+    if (value == 0) f |= 0x40
+    this.F(f)
+    return value
+}
+
 Intel8080.prototype.step = function () {
     state = this.hex4(this.PC())
     let op = this.fetch()
     state += " " + this.hex2(op)
+    let op_c7 = op & 0xc7
+    let op_cf = op & 0xcf
+    // http://www.st.rim.or.jp/~nkomatsu/intel8bit/i8080.html
+    // http://www.emulator101.com/reference/8080-by-opcode.html
     if (op == 0x00) {
         // NOP
-    } else if ((op & 0xc7) == 0x06) {
-        // LDI
+    } else if ((op & 0xc0) == 0x40) {
+        // MOV B/C/D/E/H/L/M/A
+        this.R8((op & 0x38) >> 3, this.R8(op & 0x07))
+    } else if (op_c7 == 0x06) {
+        // MVI B/C/D/E/H/L/M/A
         let v = this.fetch()
         state += this.hex2(v)
         this.R8((op & 0x38) >> 3, v)
-    } else if ((op & 0xcf) == 0x01) {
+    } else if (op_cf == 0x01) {
         // LXI BC/DE/HL/SP
         let v = this.fetch16()
         state += this.hex4(v)
@@ -233,13 +284,71 @@ Intel8080.prototype.step = function () {
         let v = this.fetch16()
         state += this.hex4(v)
         this.PC(v)
+    } else if (op_c7 == 0xc2) {
+        // J C/NC/Z/NZ/P/M/PO/PE
+        let v = this.fetch16()
+        state += this.hex4(v)
+        if (this.CheckFlag((op & 0x38) >> 3)) {
+            this.PC(v)
+        }
     } else if (op == 0xcd) {
         // CALL
         let v = this.fetch16()
         state += this.hex4(v)
         this.push(this.PC())
         this.PC(v)
+    } else if (op_c7 == 0xc4) {
+        // C C/NC/Z/NZ/P/M/PO/PE
+        let v = this.fetch16()
+        state += this.hex4(v)
+        if (this.CheckFlag((op & 0x38) >> 3)) {
+            this.push(this.PC())
+            this.PC(v)
+        }
+    } else if (op == 0xc9) {
+        // RET
+        this.PC(this.pop())
+    } else if (op_c7 == 0xc0) {
+        // R C/NC/Z/NZ/P/M/PO/PE
+        let v = this.fetch16()
+        state += this.hex4(v)
+        if (this.CheckFlag((op & 0x38) >> 3)) {
+            this.PC(this.pop())
+        }
+    } else if (op_cf == 0x3a) {
+        // LDA
+        let v = this.fetch16()
+        state += this.hex4(v)
+        this.A(this.memory.read(v))
+    } else if (op_cf == 0x0a) {
+        // LDAX
+        this.A(this.memory.read(this.R16SP((op & 0x30) >> 4)))
+    } else if (op_cf == 0x32) {
+        // STA
+        let v = this.fetch16()
+        state += this.hex4(v)
+        this.memory.write(v, this.A())
+    } else if (op_cf == 0x02) {
+        // STAX
+        this.memory.write(this.R16SP((op & 0x30) >> 4), this.A())
+    } else if (op_cf == 0x03) {
+        // INX
+        let i = (op & 0x30) >> 4
+        this.R16SP(i, this.R16SP(i) + 1)
+    } else if (op_cf == 0x0b) {
+        // DCX
+        let i = (op & 0x30) >> 4
+        this.R16SP(i, this.R16SP(i) - 1)
+    } else if (op_c7 == 0x04) {
+        // INR
+        let i = (op & 0x38) >> 3
+        this.R8(i, this.inc8(this.R8(i)))
+    } else if (op_c7 == 0x05) {
+        // DCR
+        let i = (op & 0x38) >> 3
+        this.R8(i, this.dec8(this.R8(i)))
     } else {
+        // Invalid Opcode
         this.Running = false
     }
     if (this.hook) {
