@@ -358,7 +358,7 @@ Intel8080.prototype.step = function () {
         let v = this.fetch16()
         state += this.hex4(v)
         this.A(this.memory.read(v))
-    } else if (op == 0x32) {
+    } else if (op == 0x2a) {
         // LHLD
         let v = this.fetch16()
         state += this.hex4(v)
@@ -504,6 +504,7 @@ Intel8080.prototype.step = function () {
     } else if (op == 0xfb) {
         // EI
         this.Interrupt = true
+        //this.Running = false
     } else if (op == 0xf3) {
         // DI
         this.Interrupt = false
@@ -529,6 +530,7 @@ Intel8080.prototype.step = function () {
         let v = this.fetch()
         state += this.hex2(v)
         // Not yet!
+        // this.Running = false
     } else {
         // Invalid Opcode
         // 0x27 DAA
@@ -565,6 +567,7 @@ Intel8080.prototype.run = function () {
 
 Intel8080.prototype.int = function (value) {
     if (this.Interrupt) {
+        this.Interrupt = false
         this.call(value)
     }
 }

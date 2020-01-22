@@ -28,8 +28,8 @@ let logs = []
 
 let hook = (state) => {
     logs.push(state)
-    logs = logs.slice(-20)
-    //document.getElementById("log").value = logs.join("\n")
+    logs = logs.slice(-100)
+    document.getElementById("log").value = logs.join("\n")
 }
 
 let cpu = new Intel8080(memory, hook);
@@ -74,9 +74,9 @@ function updateScreen() {
 document.querySelector("#vblank").addEventListener("click", () => {
     let iv = false
     setInterval(() => {
-        cpu.int(iv ? 0x08 : 0x10)
+        cpu.int(iv ? 0x08 : 0x08)
         iv = !iv
-        console.log(iv)
+        //console.log(iv)
         updateScreen()    
     }, 60)
 })
