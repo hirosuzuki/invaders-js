@@ -28,8 +28,8 @@ let logs = []
 
 let hook = (state) => {
     logs.push(state)
-    logs = logs.slice(-10)
-    document.getElementById("log").value = logs.join("\n")
+    logs = logs.slice(-20)
+    //document.getElementById("log").value = logs.join("\n")
 }
 
 let cpu = new Intel8080(memory, hook);
@@ -48,4 +48,35 @@ document.querySelector("#start").addEventListener("click", () => {
 
 document.querySelector("#stop").addEventListener("click", () => {
     cpu.Running = false
+})
+
+function updateScreen() {
+    let canvas = document.getElementById("screen");
+    let context = canvas.getContext('2d');
+    let imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    let pixels = imageData.data;
+    for (let y = 0; y < 224; y++) {
+        for (let x = 0; x < 32; x++) {
+            let data = ram[0x400 + y * 32 + x]
+            for (let i = 0; i < 8; i++) {
+                var base = (y * 256 + x * 8 + i) * 4;
+                let c = (data & (128 >> i)) ? 255 : 0;
+                pixels[base + 0] = c;
+                pixels[base + 1] = c;
+                pixels[base + 2] = c;
+                pixels[base + 3] = 255;
+            }
+        }
+    }
+    context.putImageData(imageData, 0, 0);
+}
+
+document.querySelector("#vblank").addEventListener("click", () => {
+    let iv = false
+    setInterval(() => {
+        cpu.int(iv ? 0x08 : 0x10)
+        iv = !iv
+        console.log(iv)
+        updateScreen()    
+    }, 60)
 })

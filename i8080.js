@@ -13,8 +13,15 @@ function Intel8080(memory, hook) {
         SP: 0,
         PC: 0
     }
+    this.opcount = 0
     this.Interrupt = false
     this.Running = false
+    this.flagTable = []
+    for (let i = 0; i < 256; i++) {
+        // Flag := SZ0H0P1C
+        let parity = (i ^ (i >> 1) ^ (i >> 2) ^ (i >> 3) ^ (i >> 4) ^ (i >> 5) ^ (i >> 6) ^ (i >> 7)) & 1;
+        this.flagTable[i] = (i & 0x80) | (i == 0 ? 0x40 : 0x00) | (parity == 0 ? 0x04: 0x00);
+    }
 }
 
 Intel8080.prototype.A = function (value) {
@@ -186,17 +193,6 @@ Intel8080.prototype.CheckFlag = function (i) {
     }
 }
 
-Intel8080.prototype.run = function () {
-    let loop = () => {
-        if (this.Running) {
-            this.step()
-            setInterval(loop, 30)
-        }
-    }
-    this.Running = true
-    setInterval(loop, 0)
-}
-
 Intel8080.prototype.hex2 = function (value) {
     let s = value.toString(16).toUpperCase()
     if (value <= 15) {
@@ -234,34 +230,77 @@ Intel8080.prototype.pop = function () {
 
 Intel8080.prototype.inc8 = function (value) {
     value = (value + 1) & 0xff
-    let f = this.F()
-    // F := SZ0H0P1C
-    //      xx-x-x--
-    f = f & 0x2b
-    f |= (value & 0x80)
-    if (value == 0) f |= 0x40
-    this.F(f)
+    this.F(this.F() & 0x2b | this.flagTable[value])
     return value
 }
 
 Intel8080.prototype.dec8 = function (value) {
     value = (value - 1) & 0xff
-    let f = this.F()
-    // F := SZ0H0P1C
-    //      xx-x-x--
-    f = f & 0x2b
-    f |= (value & 0x80)
-    if (value == 0) f |= 0x40
-    this.F(f)
+    this.F(this.F() & 0x2b | this.flagTable[value])
     return value
+}
+
+Intel8080.prototype.sum = function (v1, v2, v3) {
+    let value = v1 + v2 + v3
+    let carry = v1 ^ v2 ^ value
+    this.F(this.F() & 0x2a | this.flagTable[value & 0xff] | (carry & 0x10) | (carry >> 8 & 0x01))
+    return value & 0xff
+}
+
+Intel8080.prototype.add = function (v1, v2) {
+    return this.sum(v1, v2, 0)
+}
+
+Intel8080.prototype.adc = function (v1, v2) {
+    return this.sum(v1, v2, this.F() & 1)
+}
+
+Intel8080.prototype.sub = function (v1, v2) {
+    return this.sum(v1, -v2, 0)
+}
+
+Intel8080.prototype.sbc = function (v1, v2) {
+    return this.sum(v1, -v2, -(this.F() & 1))
+}
+
+Intel8080.prototype.and = function (v1, v2) {
+    let value = v1 & v2 & 0xff
+    this.F(this.F() & 0x2b | this.flagTable[value])
+    return value
+}
+
+Intel8080.prototype.or = function (v1, v2) {
+    let value = v1 & v2 & 0xff
+    this.F(this.F() & 0x2b | this.flagTable[value])
+    return value
+}
+
+Intel8080.prototype.xor = function (v1, v2) {
+    let value = v1 & v2 & 0xff
+    this.F(this.F() & 0x2b | this.flagTable[value])
+    return value
+}
+
+Intel8080.prototype.add16 = function (v1, v2) {
+    let value = v1 + v2
+    let carry = v1 ^ v2 ^ value
+    this.F(this.F() & 0xfe | (carry >> 16 & 0x01))
+    return value & 0xffff
+}
+
+Intel8080.prototype.call = function (value) {
+    this.push(this.PC())
+    this.PC(value)
 }
 
 Intel8080.prototype.step = function () {
     state = this.hex4(this.PC())
+    this.opcount += 1
     let op = this.fetch()
     state += " " + this.hex2(op)
     let op_c7 = op & 0xc7
     let op_cf = op & 0xcf
+    let op_f8 = op & 0xf8
     // http://www.st.rim.or.jp/~nkomatsu/intel8bit/i8080.html
     // http://www.emulator101.com/reference/8080-by-opcode.html
     if (op == 0x00) {
@@ -295,39 +334,50 @@ Intel8080.prototype.step = function () {
         // CALL
         let v = this.fetch16()
         state += this.hex4(v)
-        this.push(this.PC())
-        this.PC(v)
+        this.call(v)
+    } else if (op_c7 == 0xc7) {
+        // RST
+        this.call(op & 0x38)
     } else if (op_c7 == 0xc4) {
         // C C/NC/Z/NZ/P/M/PO/PE
         let v = this.fetch16()
         state += this.hex4(v)
         if (this.CheckFlag((op & 0x38) >> 3)) {
-            this.push(this.PC())
-            this.PC(v)
+            this.call(v)
         }
     } else if (op == 0xc9) {
         // RET
         this.PC(this.pop())
     } else if (op_c7 == 0xc0) {
         // R C/NC/Z/NZ/P/M/PO/PE
-        let v = this.fetch16()
-        state += this.hex4(v)
         if (this.CheckFlag((op & 0x38) >> 3)) {
             this.PC(this.pop())
         }
-    } else if (op_cf == 0x3a) {
+    } else if (op == 0x3a) {
         // LDA
         let v = this.fetch16()
         state += this.hex4(v)
         this.A(this.memory.read(v))
+    } else if (op == 0x32) {
+        // LHLD
+        let v = this.fetch16()
+        state += this.hex4(v)
+        this.L(this.memory.read(v))
+        this.H(this.memory.read(v + 1))
     } else if (op_cf == 0x0a) {
         // LDAX
         this.A(this.memory.read(this.R16SP((op & 0x30) >> 4)))
-    } else if (op_cf == 0x32) {
+    } else if (op == 0x32) {
         // STA
         let v = this.fetch16()
         state += this.hex4(v)
         this.memory.write(v, this.A())
+    } else if (op == 0x22) {
+        // SHLD
+        let v = this.fetch16()
+        state += this.hex4(v)
+        this.memory.write(v, this.L())
+        this.memory.write(v + 1, this.H())
     } else if (op_cf == 0x02) {
         // STAX
         this.memory.write(this.R16SP((op & 0x30) >> 4), this.A())
@@ -347,8 +397,144 @@ Intel8080.prototype.step = function () {
         // DCR
         let i = (op & 0x38) >> 3
         this.R8(i, this.dec8(this.R8(i)))
+    } else if (op == 0xc6) {
+        // ADI
+        let v = this.fetch()
+        state += this.hex2(v)
+        this.A(this.add(this.A(), v))
+    } else if (op == 0xce) {
+        // ACI
+        let v = this.fetch()
+        state += this.hex2(v)
+        this.A(this.adc(this.A(), v))
+    } else if (op == 0xd6) {
+        // SUI
+        let v = this.fetch()
+        state += this.hex2(v)
+        this.A(this.sub(this.A(), v))
+    } else if (op == 0xde) {
+        // SBI
+        let v = this.fetch()
+        state += this.hex2(v)
+        this.A(this.sbc(this.A(), v))
+    } else if (op == 0xe6) {
+        // ANI
+        let v = this.fetch()
+        state += this.hex2(v)
+        this.A(this.and(this.A(), v))
+    } else if (op == 0xee) {
+        // ORI
+        let v = this.fetch()
+        state += this.hex2(v)
+        this.A(this.or(this.A(), v))
+    } else if (op == 0xf6) {
+        // XRI
+        let v = this.fetch()
+        state += this.hex2(v)
+        this.A(this.xor(this.A(), v))
+    } else if (op == 0xfe) {
+        // CPI
+        let v = this.fetch()
+        state += this.hex2(v)
+        this.sub(this.A(), v)
+    } else if (op_f8 == 0x80) {
+        // ADD
+        this.A(this.add(this.A(), this.R8(op & 0x07)))
+    } else if (op_f8 == 0x88) {
+        // ADC
+        this.A(this.adc(this.A(), this.R8(op & 0x07)))
+    } else if (op_f8 == 0x90) {
+        // SUB
+        this.A(this.sub(this.A(), this.R8(op & 0x07)))
+    } else if (op_f8 == 0x98) {
+        // SBB
+        this.A(this.sbb(this.A(), this.R8(op & 0x07)))
+    } else if (op_f8 == 0xa0) {
+        // ANA
+        this.A(this.and(this.A(), this.R8(op & 0x07)))
+    } else if (op_f8 == 0xa8) {
+        // ORA
+        this.A(this.or(this.A(), this.R8(op & 0x07)))
+    } else if (op_f8 == 0xb0) {
+        // XRA
+        this.A(this.xor(this.A(), this.R8(op & 0x07)))
+    } else if (op_f8 == 0xb8) {
+        // CMP
+        this.sub(this.A(), this.R8(op & 0x07))
+    } else if (op_cf == 0xc5) {
+        // PUSH
+        this.push(this.R16((op & 0x30) >> 4))
+    } else if (op_cf == 0xc1) {
+        // POP
+        this.R16((op & 0x30) >> 4, this.pop())
+    } else if (op_cf == 0x09) {
+        // DAD
+        this.HL(this.add16(this.HL(), this.R16((op & 0x30) >> 4)))
+    } else if (op == 0xeb) {
+        // XCHG
+        let value = this.DE()
+        this.DE(this.HL())
+        this.HL(value)
+    } else if (op == 0x07) {
+        // RLC
+        let a = this.A()
+        let value = ((a << 1) & 0xfe) | ((a >> 7) & 0x01)
+        this.F(this.F() & 0xfe | (value & 0x01))
+        this.A(value)
+    } else if (op == 0x0f) {
+        // RRC
+        let a = this.A()
+        let value = ((a >> 1) & 0x7f) | ((a << 7) & 0x80)
+        this.F(this.F() & 0xfe | (a & 0x01))
+        this.A(value)
+    } else if (op == 0x17) {
+        // RAL
+        let a = this.A()
+        let f = this.F()
+        let value = ((a << 1) & 0xfe) | (f & 0x01)
+        this.F(this.F() & 0xfe | ((a >> 7) & 0x01))
+        this.A(value)
+    } else if (op == 0x1f) {
+        // RAR
+        let a = this.A()
+        let f = this.F()
+        let value = ((a >> 1) & 0x7f) | ((f << 7) & 0x80)
+        this.F(this.F() & 0xfe | (a & 0x01))
+        this.A(value)
+    } else if (op == 0xfb) {
+        // EI
+        this.Interrupt = true
+    } else if (op == 0xf3) {
+        // DI
+        this.Interrupt = false
+    } else if (op == 0x76) {
+        // CMA
+        this.A(this.A() ^ 0xff)
+    } else if (op == 0x37) {
+        // STC
+        this.F(this.F() & 0x01)
+    } else if (op == 0x3f) {
+        // CMC
+        this.F(this.F() ^ 0x01)
+    } else if (op == 0x76) {
+        // HLT
+        this.PC(this.PC() - 1)
+    } else if (op == 0xd3) {
+        // OUT
+        let v = this.fetch()
+        state += this.hex2(v)
+        // Not yet!
+    } else if (op == 0xdb) {
+        // IN
+        let v = this.fetch()
+        state += this.hex2(v)
+        // Not yet!
     } else {
         // Invalid Opcode
+        // 0x27 DAA
+        // 0xe3 XTHL
+        // 0xf9 SPHL
+        // 0xe9 PCHL
         this.Running = false
     }
     if (this.hook) {
@@ -359,6 +545,26 @@ Intel8080.prototype.step = function () {
         state += " HL=" + this.hex4(this.HL())
         state += " SP=" + this.hex4(this.SP())
         state += " PC=" + this.hex4(this.PC())
+        state += " [" + this.opcount + "]"
         this.hook(state)
+    }
+}
+
+Intel8080.prototype.run = function () {
+    let loop = () => {
+        if (this.Running) {
+            for (let i = 0; i < 8; i++) {
+                this.step()
+            }
+            setTimeout(loop, 0)
+        }
+    }
+    this.Running = true
+    setTimeout(loop, 0)
+}
+
+Intel8080.prototype.int = function (value) {
+    if (this.Interrupt) {
+        this.call(value)
     }
 }
