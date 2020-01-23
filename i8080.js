@@ -1,5 +1,7 @@
-function Intel8080(memory, hook) {
+function Intel8080(memory, io, vblank, hook) {
     this.memory = memory
+    this.io = io
+    this.vblank = vblank
     this.hook = hook
     this.register = {
         A: 0,
@@ -90,9 +92,9 @@ Intel8080.prototype.L = function (value) {
 
 Intel8080.prototype.M = function (value) {
     if (value === undefined) {
-        return this.memory.read(this.register.HL)
+        return this.memory.read(this.HL())
     } else {
-        this.memory.write(this.register.HL, value & 0xff)
+        this.memory.write(this.HL(), value & 0xff)
     }
 }
 
@@ -183,13 +185,13 @@ Intel8080.prototype.CheckFlag = function (i) {
     // F := SZ0H0P1C
     switch (i) {
         case 0: return (this.F() & 0x40) == 0x00; // NZ
-        case 1: return (this.F() & 0x40) == 0x01; // Z
+        case 1: return (this.F() & 0x40) == 0x40; // Z
         case 2: return (this.F() & 0x01) == 0x00; // NC
         case 3: return (this.F() & 0x01) == 0x01; // C
         case 4: return (this.F() & 0x04) == 0x00; // PO
-        case 5: return (this.F() & 0x04) == 0x01; // PE
+        case 5: return (this.F() & 0x04) == 0x04; // PE
         case 6: return (this.F() & 0x80) == 0x00; // P
-        case 7: return (this.F() & 0x80) == 0x01; // M
+        case 7: return (this.F() & 0x80) == 0x80; // M
     }
 }
 
@@ -240,27 +242,27 @@ Intel8080.prototype.dec8 = function (value) {
     return value
 }
 
-Intel8080.prototype.sum = function (v1, v2, v3) {
-    let value = v1 + v2 + v3
+Intel8080.prototype.sum = function (v1, v2, v3, sign) {
+    let value = v1 + (v2 + v3) * sign
     let carry = v1 ^ v2 ^ value
     this.F(this.F() & 0x2a | this.flagTable[value & 0xff] | (carry & 0x10) | (carry >> 8 & 0x01))
     return value & 0xff
 }
 
 Intel8080.prototype.add = function (v1, v2) {
-    return this.sum(v1, v2, 0)
+    return this.sum(v1, v2, 0, 1)
 }
 
 Intel8080.prototype.adc = function (v1, v2) {
-    return this.sum(v1, v2, this.F() & 1)
+    return this.sum(v1, v2, this.F() & 1, 1)
 }
 
 Intel8080.prototype.sub = function (v1, v2) {
-    return this.sum(v1, -v2, 0)
+    return this.sum(v1, v2, 0, -1)
 }
 
 Intel8080.prototype.sbc = function (v1, v2) {
-    return this.sum(v1, -v2, -(this.F() & 1))
+    return this.sum(v1, v2, (this.F() & 1), -1)
 }
 
 Intel8080.prototype.and = function (v1, v2) {
@@ -270,13 +272,13 @@ Intel8080.prototype.and = function (v1, v2) {
 }
 
 Intel8080.prototype.or = function (v1, v2) {
-    let value = v1 & v2 & 0xff
+    let value = (v1 | v2) & 0xff
     this.F(this.F() & 0x2b | this.flagTable[value])
     return value
 }
 
 Intel8080.prototype.xor = function (v1, v2) {
-    let value = v1 & v2 & 0xff
+    let value = (v1 ^ v2) & 0xff
     this.F(this.F() & 0x2b | this.flagTable[value])
     return value
 }
@@ -305,6 +307,9 @@ Intel8080.prototype.step = function () {
     // http://www.emulator101.com/reference/8080-by-opcode.html
     if (op == 0x00) {
         // NOP
+    } else if (op == 0x76) {
+        // HLT
+        this.PC(this.PC() - 1)
     } else if ((op & 0xc0) == 0x40) {
         // MOV B/C/D/E/H/L/M/A
         this.R8((op & 0x38) >> 3, this.R8(op & 0x07))
@@ -423,15 +428,15 @@ Intel8080.prototype.step = function () {
         state += this.hex2(v)
         this.A(this.and(this.A(), v))
     } else if (op == 0xee) {
-        // ORI
-        let v = this.fetch()
-        state += this.hex2(v)
-        this.A(this.or(this.A(), v))
-    } else if (op == 0xf6) {
         // XRI
         let v = this.fetch()
         state += this.hex2(v)
         this.A(this.xor(this.A(), v))
+    } else if (op == 0xf6) {
+        // ORI
+        let v = this.fetch()
+        state += this.hex2(v)
+        this.A(this.or(this.A(), v))
     } else if (op == 0xfe) {
         // CPI
         let v = this.fetch()
@@ -453,11 +458,11 @@ Intel8080.prototype.step = function () {
         // ANA
         this.A(this.and(this.A(), this.R8(op & 0x07)))
     } else if (op_f8 == 0xa8) {
-        // ORA
-        this.A(this.or(this.A(), this.R8(op & 0x07)))
-    } else if (op_f8 == 0xb0) {
         // XRA
         this.A(this.xor(this.A(), this.R8(op & 0x07)))
+    } else if (op_f8 == 0xb0) {
+        // ORA
+        this.A(this.or(this.A(), this.R8(op & 0x07)))
     } else if (op_f8 == 0xb8) {
         // CMP
         this.sub(this.A(), this.R8(op & 0x07))
@@ -469,7 +474,7 @@ Intel8080.prototype.step = function () {
         this.R16((op & 0x30) >> 4, this.pop())
     } else if (op_cf == 0x09) {
         // DAD
-        this.HL(this.add16(this.HL(), this.R16((op & 0x30) >> 4)))
+        this.HL(this.add16(this.HL(), this.R16SP((op & 0x30) >> 4)))
     } else if (op == 0xeb) {
         // XCHG
         let value = this.DE()
@@ -508,7 +513,7 @@ Intel8080.prototype.step = function () {
     } else if (op == 0xf3) {
         // DI
         this.Interrupt = false
-    } else if (op == 0x76) {
+    } else if (op == 0x2f) {
         // CMA
         this.A(this.A() ^ 0xff)
     } else if (op == 0x37) {
@@ -517,29 +522,52 @@ Intel8080.prototype.step = function () {
     } else if (op == 0x3f) {
         // CMC
         this.F(this.F() ^ 0x01)
-    } else if (op == 0x76) {
-        // HLT
-        this.PC(this.PC() - 1)
     } else if (op == 0xd3) {
         // OUT
         let v = this.fetch()
         state += this.hex2(v)
-        // Not yet!
+        this.io.write(v, this.A())
     } else if (op == 0xdb) {
         // IN
         let v = this.fetch()
         state += this.hex2(v)
-        // Not yet!
-        // this.Running = false
+        this.A(this.io.read(v))
+    } else if (op == 0x27) {
+        // DAA
+        let a = this.A()
+        let f = this.F()
+        if ((a & 0x0f) >= 0x0a || (f & 0x10) == 0x10) {
+            a += 0x06
+            f |= 0x10
+        }
+        if ((a & 0xf0) >= 0xa0 || (f & 0x01) == 0x01) {
+            a += 0x60
+            f |= 0x01
+        }
+        f = f & 0x2b | this.flagTable[a]
+        this.A(a)
+        this.F(f)
+    } else if (op == 0xf9) {
+        // SPHL
+        this.SP(this.HL())
+    } else if (op == 0xe9) {
+        // PCHL
+        this.PC(this.HL())
+    } else if (op == 0xe3) {
+        // XTHL
+        let l = this.L()
+        let h = this.H()
+        this.L(this.memory.read(this.SP()))
+        this.H(this.memory.read(this.SP() + 1))
+        this.memory.write(this.SP(), l)
+        this.memory.write(this.SP() + 1, h)
     } else {
         // Invalid Opcode
-        // 0x27 DAA
         // 0xe3 XTHL
-        // 0xf9 SPHL
-        // 0xe9 PCHL
         this.Running = false
     }
     if (this.hook) {
+        // if (this.PC() == 0x29) this.Running = false;
         state = (state + "    ").slice(0, 11)
         state += " AF=" + this.hex4(this.AF())
         state += " BC=" + this.hex4(this.BC())
@@ -554,12 +582,18 @@ Intel8080.prototype.step = function () {
 
 Intel8080.prototype.run = function () {
     let loop = () => {
-        if (this.Running) {
-            for (let i = 0; i < 8; i++) {
-                this.step()
-            }
-            setTimeout(loop, 0)
-        }
+        for (let i = 0; i < 1000; i++) {
+            this.step()
+            if (!this.Running) return
+        }        
+        this.int(0x08)
+        for (let i = 0; i < 1000; i++) {
+            this.step()
+            if (!this.Running) return
+        }        
+        this.int(0x10)
+        this.vblank()
+        setTimeout(loop, 100)
     }
     this.Running = true
     setTimeout(loop, 0)
